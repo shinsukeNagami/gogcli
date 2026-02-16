@@ -442,8 +442,8 @@ func TestScopes_FormsIncludesBodyAndResponses(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	if !containsScope(scopes, "https://www.googleapis.com/auth/forms.body") {
-		t.Fatalf("missing forms.body in %v", scopes)
+	if !containsScope(scopes, "https://www.googleapis.com/auth/forms") {
+		t.Fatalf("missing forms in %v", scopes)
 	}
 
 	if !containsScope(scopes, "https://www.googleapis.com/auth/forms.responses.readonly") {

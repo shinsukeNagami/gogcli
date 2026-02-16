@@ -176,7 +176,7 @@ var serviceInfoByService = map[Service]serviceInfo{
 	},
 	ServiceForms: {
 		scopes: []string{
-			"https://www.googleapis.com/auth/forms.body",
+			"https://www.googleapis.com/auth/forms",
 			"https://www.googleapis.com/auth/forms.responses.readonly",
 		},
 		user: true,
@@ -500,13 +500,13 @@ func scopesForServiceWithOptions(service Service, opts ScopeOptions) ([]string, 
 
 		return []string{driveScopeValue(), sheetsScope}, nil
 	case ServiceForms:
-		formBodyScope := "https://www.googleapis.com/auth/forms.body"
+		formScope := "https://www.googleapis.com/auth/forms"
 		if opts.Readonly {
-			formBodyScope = "https://www.googleapis.com/auth/forms.body.readonly"
+			formScope = "https://www.googleapis.com/auth/forms.body.readonly"
 		}
 
 		return []string{
-			formBodyScope,
+			formScope,
 			"https://www.googleapis.com/auth/forms.responses.readonly",
 		}, nil
 	case ServiceAppScript:
