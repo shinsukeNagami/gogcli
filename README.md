@@ -351,7 +351,7 @@ Service scope matrix (auto-generated; run `go run scripts/gen-auth-services-md.g
 | tasks | yes | Tasks API | `https://www.googleapis.com/auth/tasks` |  |
 | sheets | yes | Sheets API, Drive API | `https://www.googleapis.com/auth/drive`<br>`https://www.googleapis.com/auth/spreadsheets` | Export via Drive |
 | people | yes | People API | `profile` | OIDC profile scope |
-| forms | yes | Forms API | `https://www.googleapis.com/auth/forms.body`<br>`https://www.googleapis.com/auth/forms.responses.readonly` |  |
+| forms | yes | Forms API | `https://www.googleapis.com/auth/forms`<br>`https://www.googleapis.com/auth/forms.responses.readonly` |  |
 | appscript | yes | Apps Script API | `https://www.googleapis.com/auth/script.projects`<br>`https://www.googleapis.com/auth/script.deployments`<br>`https://www.googleapis.com/auth/script.processes` |  |
 | groups | no | Cloud Identity API | `https://www.googleapis.com/auth/cloud-identity.groups.readonly` | Workspace only |
 | keep | no | Keep API | `https://www.googleapis.com/auth/keep.readonly` | Workspace only; service account (domain-wide delegation) |

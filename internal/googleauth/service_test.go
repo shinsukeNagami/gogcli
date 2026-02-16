@@ -436,7 +436,7 @@ func TestScopes_GmailIncludesSettingsSharing(t *testing.T) {
 	}
 }
 
-func TestScopes_FormsIncludesBodyAndResponses(t *testing.T) {
+func TestScopes_FormsIncludesFullScopeAndResponses(t *testing.T) {
 	scopes, err := Scopes(ServiceForms)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -467,6 +467,30 @@ func TestScopesForServiceWithOptions_AppScriptReadonly(t *testing.T) {
 
 	if containsScope(scopes, "https://www.googleapis.com/auth/script.projects") {
 		t.Fatalf("unexpected script.projects in %v", scopes)
+	}
+}
+
+func TestScopesForServiceWithOptions_Forms_DefaultAndReadonly(t *testing.T) {
+	full, err := scopesForServiceWithOptions(ServiceForms, ScopeOptions{})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !containsScope(full, "https://www.googleapis.com/auth/forms") {
+		t.Fatalf("missing forms in %v", full)
+	}
+	if containsScope(full, "https://www.googleapis.com/auth/forms.body") {
+		t.Fatalf("unexpected forms.body in %v", full)
+	}
+
+	ro, err := scopesForServiceWithOptions(ServiceForms, ScopeOptions{Readonly: true})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !containsScope(ro, "https://www.googleapis.com/auth/forms.body.readonly") {
+		t.Fatalf("missing forms.body.readonly in %v", ro)
+	}
+	if containsScope(ro, "https://www.googleapis.com/auth/forms") {
+		t.Fatalf("unexpected forms in readonly scopes %v", ro)
 	}
 }
 
