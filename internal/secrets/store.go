@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,6 +61,7 @@ var (
 	errKeyringTimeout        = errors.New("keyring connection timed out")
 	openKeyringFunc          = openKeyring
 	keyringOpenFunc          = keyring.Open
+	currentGOOS              = runtime.GOOS
 )
 
 type KeyringBackendInfo struct {
@@ -72,6 +74,7 @@ const (
 	keyringBackendSourceConfig  = "config"
 	keyringBackendSourceDefault = "default"
 	keyringBackendAuto          = "auto"
+	windowsFileKeyPrefix        = "__gogcli_win__"
 )
 
 func ResolveKeyringBackendInfo() (KeyringBackendInfo, error) {
@@ -253,6 +256,93 @@ func OpenDefault() (Store, error) {
 	return &KeyringStore{ring: ring}, nil
 }
 
+func shouldUseWindowsFileSafeKeys() bool {
+	if currentGOOS != "windows" {
+		return false
+	}
+
+	backendInfo, err := ResolveKeyringBackendInfo()
+	if err != nil {
+		return false
+	}
+
+	return backendInfo.Value == "file"
+}
+
+func keyringStorageKey(key string) string {
+	if !shouldUseWindowsFileSafeKeys() || !strings.Contains(key, ":") {
+		return key
+	}
+
+	return windowsFileKeyPrefix + base64.RawURLEncoding.EncodeToString([]byte(key))
+}
+
+func decodeKeyringStorageKey(key string) string {
+	if !strings.HasPrefix(key, windowsFileKeyPrefix) {
+		return key
+	}
+
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(key, windowsFileKeyPrefix))
+	if err != nil {
+		return key
+	}
+
+	return string(decoded)
+}
+
+func getCompatibleItem(ring keyring.Keyring, rawKey string) (keyring.Item, bool, error) {
+	primaryKey := keyringStorageKey(rawKey)
+	item, err := ring.Get(primaryKey)
+	if err == nil {
+		return item, false, nil
+	}
+
+	if primaryKey == rawKey || !errors.Is(err, keyring.ErrKeyNotFound) {
+		return keyring.Item{}, false, err
+	}
+
+	fallbackItem, fallbackErr := ring.Get(rawKey)
+	if fallbackErr == nil {
+		return fallbackItem, true, nil
+	}
+
+	if !errors.Is(fallbackErr, keyring.ErrKeyNotFound) {
+		return keyring.Item{}, false, fallbackErr
+	}
+
+	return keyring.Item{}, false, err
+}
+
+func removeCompatibleKey(ring keyring.Keyring, rawKey string) error {
+	primaryKey := keyringStorageKey(rawKey)
+	err := ring.Remove(primaryKey)
+	if err == nil {
+		if primaryKey != rawKey {
+			fallbackErr := ring.Remove(rawKey)
+			if fallbackErr != nil && !errors.Is(fallbackErr, keyring.ErrKeyNotFound) {
+				return fallbackErr
+			}
+		}
+
+		return nil
+	}
+
+	if !errors.Is(err, keyring.ErrKeyNotFound) {
+		return err
+	}
+
+	if primaryKey == rawKey {
+		return nil
+	}
+
+	fallbackErr := ring.Remove(rawKey)
+	if fallbackErr == nil || errors.Is(fallbackErr, keyring.ErrKeyNotFound) {
+		return nil
+	}
+
+	return fallbackErr
+}
+
 func SetSecret(key string, value []byte) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -335,12 +425,12 @@ func (s *KeyringStore) SetToken(client string, email string, tok Token) error {
 		return fmt.Errorf("encode token: %w", err)
 	}
 
-	if err := s.ring.Set(keyringItem(tokenKey(normalizedClient, email), payload)); err != nil {
+	if err := s.ring.Set(keyringItem(keyringStorageKey(tokenKey(normalizedClient, email)), payload)); err != nil {
 		return wrapKeychainError(fmt.Errorf("store token: %w", err))
 	}
 
 	if normalizedClient == config.DefaultClientName {
-		if err := s.ring.Set(keyringItem(legacyTokenKey(email), payload)); err != nil {
+		if err := s.ring.Set(keyringItem(keyringStorageKey(legacyTokenKey(email)), payload)); err != nil {
 			return wrapKeychainError(fmt.Errorf("store legacy token: %w", err))
 		}
 	}
@@ -359,12 +449,12 @@ func (s *KeyringStore) GetToken(client string, email string) (Token, error) {
 		return Token{}, err
 	}
 
-	item, err := s.ring.Get(tokenKey(normalizedClient, email))
+	item, usedFallback, err := getCompatibleItem(s.ring, tokenKey(normalizedClient, email))
 	if err != nil {
 		if normalizedClient == config.DefaultClientName {
-			if legacyItem, legacyErr := s.ring.Get(legacyTokenKey(email)); legacyErr == nil {
+			if legacyItem, _, legacyErr := getCompatibleItem(s.ring, legacyTokenKey(email)); legacyErr == nil {
 				item = legacyItem
-				if migrateErr := s.ring.Set(keyringItem(tokenKey(normalizedClient, email), legacyItem.Data)); migrateErr != nil {
+				if migrateErr := s.ring.Set(keyringItem(keyringStorageKey(tokenKey(normalizedClient, email)), legacyItem.Data)); migrateErr != nil {
 					return Token{}, wrapKeychainError(fmt.Errorf("migrate token: %w", migrateErr))
 				}
 			} else {
@@ -372,6 +462,12 @@ func (s *KeyringStore) GetToken(client string, email string) (Token, error) {
 			}
 		} else {
 			return Token{}, fmt.Errorf("read token: %w", err)
+		}
+	}
+
+	if usedFallback {
+		if migrateErr := s.ring.Set(keyringItem(keyringStorageKey(tokenKey(normalizedClient, email)), item.Data)); migrateErr != nil {
+			return Token{}, wrapKeychainError(fmt.Errorf("migrate token: %w", migrateErr))
 		}
 	}
 
@@ -401,12 +497,12 @@ func (s *KeyringStore) DeleteToken(client string, email string) error {
 		return err
 	}
 
-	if err := s.ring.Remove(tokenKey(normalizedClient, email)); err != nil && !errors.Is(err, keyring.ErrKeyNotFound) {
+	if err := removeCompatibleKey(s.ring, tokenKey(normalizedClient, email)); err != nil {
 		return fmt.Errorf("delete token: %w", err)
 	}
 
 	if normalizedClient == config.DefaultClientName {
-		if err := s.ring.Remove(legacyTokenKey(email)); err != nil && !errors.Is(err, keyring.ErrKeyNotFound) {
+		if err := removeCompatibleKey(s.ring, legacyTokenKey(email)); err != nil {
 			return fmt.Errorf("delete legacy token: %w", err)
 		}
 	}
@@ -450,6 +546,8 @@ func (s *KeyringStore) ListTokens() ([]Token, error) {
 }
 
 func ParseTokenKey(k string) (client string, email string, ok bool) {
+	k = decodeKeyringStorageKey(k)
+
 	const prefix = "token:"
 	if !strings.HasPrefix(k, prefix) {
 		return "", "", false
@@ -514,7 +612,13 @@ func (s *KeyringStore) GetDefaultAccount(client string) (string, error) {
 	}
 
 	if normalizedClient != "" {
-		if it, getErr := s.ring.Get(defaultAccountKeyForClient(normalizedClient)); getErr == nil {
+		if it, usedFallback, getErr := getCompatibleItem(s.ring, defaultAccountKeyForClient(normalizedClient)); getErr == nil {
+			if usedFallback {
+				if migrateErr := s.ring.Set(keyringItem(keyringStorageKey(defaultAccountKeyForClient(normalizedClient)), it.Data)); migrateErr != nil {
+					return "", wrapKeychainError(fmt.Errorf("migrate default account: %w", migrateErr))
+				}
+			}
+
 			return string(it.Data), nil
 		} else if !errors.Is(getErr, keyring.ErrKeyNotFound) {
 			return "", fmt.Errorf("read default account: %w", getErr)
@@ -545,7 +649,7 @@ func (s *KeyringStore) SetDefaultAccount(client string, email string) error {
 	}
 
 	if normalizedClient != "" {
-		if err := s.ring.Set(keyringItem(defaultAccountKeyForClient(normalizedClient), []byte(email))); err != nil {
+		if err := s.ring.Set(keyringItem(keyringStorageKey(defaultAccountKeyForClient(normalizedClient)), []byte(email))); err != nil {
 			return fmt.Errorf("store default account: %w", err)
 		}
 	}

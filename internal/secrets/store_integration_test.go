@@ -12,8 +12,7 @@ import (
 
 func setupKeyringEnv(t *testing.T) {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := setupUserConfigEnv(t)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("GOG_KEYRING_BACKEND", "file")
 	t.Setenv("GOG_KEYRING_PASSWORD", "testpass")
@@ -60,8 +59,7 @@ func TestKeyringStore_TokenRoundTrip(t *testing.T) {
 }
 
 func TestEnsureKeyringDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := setupUserConfigEnv(t)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 
 	_, err := config.EnsureKeyringDir()

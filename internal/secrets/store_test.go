@@ -16,6 +16,19 @@ import (
 
 var errKeyringOpenBlocked = errors.New("keyring open blocked")
 
+func setupUserConfigEnv(t *testing.T) string {
+	t.Helper()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+
+	return home
+}
+
 // keyringConfig creates a keyring.Config for testing.
 // KeychainTrustApplication is false to match production config (see store.go).
 func keyringConfig(keyringDir string) keyring.Config {
@@ -29,9 +42,7 @@ func keyringConfig(keyringDir string) keyring.Config {
 }
 
 func TestResolveKeyringBackendInfo_Default(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	setupUserConfigEnv(t)
 	t.Setenv("GOG_KEYRING_BACKEND", "")
 
 	info, err := ResolveKeyringBackendInfo()
@@ -49,9 +60,7 @@ func TestResolveKeyringBackendInfo_Default(t *testing.T) {
 }
 
 func TestResolveKeyringBackendInfo_Config(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	setupUserConfigEnv(t)
 	t.Setenv("GOG_KEYRING_BACKEND", "")
 
 	path, err := config.ConfigPath()
@@ -82,9 +91,7 @@ func TestResolveKeyringBackendInfo_Config(t *testing.T) {
 }
 
 func TestResolveKeyringBackendInfo_EnvOverridesConfig(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	setupUserConfigEnv(t)
 	t.Setenv("GOG_KEYRING_BACKEND", "keychain")
 
 	path, err := config.ConfigPath()
@@ -183,9 +190,7 @@ func TestKeyringDbusGuards(t *testing.T) {
 }
 
 func TestOpenKeyringWithTimeout_Success(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	setupUserConfigEnv(t)
 	t.Setenv("GOG_KEYRING_BACKEND", "file")
 	t.Setenv("GOG_KEYRING_PASSWORD", "testpass")
 
@@ -208,9 +213,7 @@ func TestOpenKeyringWithTimeout_Success(t *testing.T) {
 }
 
 func TestOpenKeyringWithTimeout_Timeout(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	setupUserConfigEnv(t)
 	t.Setenv("GOG_KEYRING_BACKEND", "file")
 	t.Setenv("GOG_KEYRING_PASSWORD", "testpass")
 
@@ -252,9 +255,7 @@ func TestOpenKeyring_NoDBus_ForcesFileBackend(t *testing.T) {
 		t.Skip("D-Bus detection only applies on Linux")
 	}
 
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	setupUserConfigEnv(t)
 	t.Setenv("GOG_KEYRING_BACKEND", "")        // auto
 	t.Setenv("GOG_KEYRING_PASSWORD", "testpw") // for file backend
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")   // no D-Bus
@@ -271,9 +272,7 @@ func TestOpenKeyring_NoDBus_ForcesFileBackend(t *testing.T) {
 }
 
 func TestOpenKeyring_ExplicitBackend_IgnoresDBusDetection(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	setupUserConfigEnv(t)
 	t.Setenv("GOG_KEYRING_BACKEND", "file") // explicit file
 	t.Setenv("GOG_KEYRING_PASSWORD", "testpw")
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "") // no D-Bus (shouldn't matter)

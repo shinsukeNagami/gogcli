@@ -79,6 +79,18 @@ func TestParseTokenKey(t *testing.T) {
 	}
 }
 
+func TestParseTokenKey_WindowsFileSafeKey(t *testing.T) {
+	encoded := windowsFileKeyPrefix + "dG9rZW46b3JnOmFAYi5jb20"
+
+	client, email, ok := ParseTokenKey(encoded)
+	if !ok {
+		t.Fatalf("expected encoded key to parse")
+	}
+	if client != "org" || email != "a@b.com" {
+		t.Fatalf("unexpected parse: client=%q email=%q", client, email)
+	}
+}
+
 func TestAllowedBackends(t *testing.T) {
 	if _, err := allowedBackends(KeyringBackendInfo{Value: "keychain"}); err != nil {
 		t.Fatalf("keychain allowed: %v", err)
@@ -165,6 +177,8 @@ func TestKeyringStoreDeleteAndDefaultErrors(t *testing.T) {
 }
 
 func TestKeyringStoreWritePathsSetLabel(t *testing.T) {
+	setupUserConfigEnv(t)
+
 	ring := keyring.NewArrayKeyring(nil)
 	store := &KeyringStore{ring: ring}
 	email := "A@B.COM"
@@ -176,8 +190,8 @@ func TestKeyringStoreWritePathsSetLabel(t *testing.T) {
 	}
 
 	for _, k := range []string{
-		tokenKey(client, normalize(email)),
-		legacyTokenKey(normalize(email)),
+		keyringStorageKey(tokenKey(client, normalize(email))),
+		keyringStorageKey(legacyTokenKey(normalize(email))),
 	} {
 		it, err := ring.Get(k)
 		if err != nil {
@@ -194,7 +208,7 @@ func TestKeyringStoreWritePathsSetLabel(t *testing.T) {
 	}
 
 	for _, k := range []string{
-		defaultAccountKeyForClient(client),
+		keyringStorageKey(defaultAccountKeyForClient(client)),
 		defaultAccountKey,
 	} {
 		it, err := ring.Get(k)
@@ -209,6 +223,8 @@ func TestKeyringStoreWritePathsSetLabel(t *testing.T) {
 }
 
 func TestGetTokenMigrationSetsLabel(t *testing.T) {
+	setupUserConfigEnv(t)
+
 	ring := keyring.NewArrayKeyring(nil)
 	store := &KeyringStore{ring: ring}
 	email := "a@b.com"
@@ -231,7 +247,7 @@ func TestGetTokenMigrationSetsLabel(t *testing.T) {
 		t.Fatalf("GetToken: %v", getErr)
 	}
 
-	it, err := ring.Get(tokenKey(client, email))
+	it, err := ring.Get(keyringStorageKey(tokenKey(client, email)))
 	if err != nil {
 		t.Fatalf("Get migrated key: %v", err)
 	}
@@ -261,5 +277,164 @@ func TestSetSecretSetsLabel(t *testing.T) {
 
 	if it.Label != config.AppName {
 		t.Fatalf("expected label %q, got %q", config.AppName, it.Label)
+	}
+}
+
+type failingRemoveKeyring struct {
+	*keyring.ArrayKeyring
+	failKey string
+	err     error
+}
+
+func (k *failingRemoveKeyring) Remove(key string) error {
+	if key == k.failKey {
+		return k.err
+	}
+
+	return k.ArrayKeyring.Remove(key)
+}
+
+type failingGetKeyring struct {
+	*keyring.ArrayKeyring
+	failKey string
+	err     error
+}
+
+func (k *failingGetKeyring) Get(key string) (keyring.Item, error) {
+	if key == k.failKey {
+		return keyring.Item{}, k.err
+	}
+
+	return k.ArrayKeyring.Get(key)
+}
+
+func TestRemoveCompatibleKey_PropagatesFallbackRemoveError(t *testing.T) {
+	setupUserConfigEnv(t)
+
+	ring := &failingRemoveKeyring{
+		ArrayKeyring: keyring.NewArrayKeyring(nil),
+		err:          errTestKeychain,
+	}
+
+	rawKey := tokenKey(config.DefaultClientName, "a@b.com")
+	safeKey := keyringStorageKey(rawKey)
+	ring.failKey = rawKey
+
+	if err := ring.Set(keyring.Item{Key: safeKey, Data: []byte("value")}); err != nil {
+		t.Fatalf("Set safe key: %v", err)
+	}
+
+	if err := ring.Set(keyring.Item{Key: rawKey, Data: []byte("legacy")}); err != nil {
+		t.Fatalf("Set raw key: %v", err)
+	}
+
+	if err := removeCompatibleKey(ring, rawKey); !errors.Is(err, errTestKeychain) {
+		t.Fatalf("expected fallback remove error, got %v", err)
+	}
+}
+
+func TestGetCompatibleItem_PropagatesFallbackGetError(t *testing.T) {
+	setupUserConfigEnv(t)
+
+	ring := &failingGetKeyring{
+		ArrayKeyring: keyring.NewArrayKeyring(nil),
+		err:          errTestKeychain,
+	}
+
+	rawKey := tokenKey(config.DefaultClientName, "a@b.com")
+	ring.failKey = rawKey
+
+	if _, _, err := getCompatibleItem(ring, rawKey); !errors.Is(err, errTestKeychain) {
+		t.Fatalf("expected fallback get error, got %v", err)
+	}
+}
+
+func TestKeyringStore_WindowsFileBackendReadsLegacyRawTokenKey(t *testing.T) {
+	ring := keyring.NewArrayKeyring(nil)
+	store := &KeyringStore{ring: ring}
+	origGOOS := currentGOOS
+
+	t.Cleanup(func() { currentGOOS = origGOOS })
+
+	currentGOOS = "windows"
+	t.Setenv("GOG_KEYRING_BACKEND", "file")
+
+	payload, err := json.Marshal(storedToken{
+		RefreshToken: "rt",
+		CreatedAt:    time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	rawKey := tokenKey(config.DefaultClientName, "a@b.com")
+	if setErr := ring.Set(keyring.Item{Key: rawKey, Data: payload}); setErr != nil {
+		t.Fatalf("Set raw key: %v", setErr)
+	}
+
+	tok, err := store.GetToken(config.DefaultClientName, "a@b.com")
+	if err != nil {
+		t.Fatalf("GetToken: %v", err)
+	}
+	if tok.RefreshToken != "rt" {
+		t.Fatalf("unexpected token: %#v", tok)
+	}
+
+	safeKey := keyringStorageKey(rawKey)
+	if _, getErr := ring.Get(safeKey); getErr != nil {
+		t.Fatalf("expected migrated safe key %q: %v", safeKey, getErr)
+	}
+}
+
+func TestKeyringStore_WindowsFileBackendUsesSafeDefaultAccountKey(t *testing.T) {
+	ring := keyring.NewArrayKeyring(nil)
+	store := &KeyringStore{ring: ring}
+	origGOOS := currentGOOS
+
+	t.Cleanup(func() { currentGOOS = origGOOS })
+
+	currentGOOS = "windows"
+	t.Setenv("GOG_KEYRING_BACKEND", "file")
+
+	if err := store.SetDefaultAccount(config.DefaultClientName, "a@b.com"); err != nil {
+		t.Fatalf("SetDefaultAccount: %v", err)
+	}
+
+	safeKey := keyringStorageKey(defaultAccountKeyForClient(config.DefaultClientName))
+	if _, err := ring.Get(safeKey); err != nil {
+		t.Fatalf("expected safe default-account key %q: %v", safeKey, err)
+	}
+}
+
+func TestKeyringStore_WindowsFileBackendMigratesRawDefaultAccountKey(t *testing.T) {
+	ring := keyring.NewArrayKeyring(nil)
+	store := &KeyringStore{ring: ring}
+	origGOOS := currentGOOS
+
+	t.Cleanup(func() { currentGOOS = origGOOS })
+
+	currentGOOS = "windows"
+	t.Setenv("GOG_KEYRING_BACKEND", "file")
+
+	rawKey := defaultAccountKeyForClient(config.DefaultClientName)
+	if err := ring.Set(keyring.Item{Key: rawKey, Data: []byte("a@b.com")}); err != nil {
+		t.Fatalf("Set raw default account: %v", err)
+	}
+
+	got, err := store.GetDefaultAccount(config.DefaultClientName)
+	if err != nil {
+		t.Fatalf("GetDefaultAccount: %v", err)
+	}
+	if got != "a@b.com" {
+		t.Fatalf("unexpected default account: %q", got)
+	}
+
+	safeKey := keyringStorageKey(rawKey)
+	it, err := ring.Get(safeKey)
+	if err != nil {
+		t.Fatalf("expected migrated safe default-account key %q: %v", safeKey, err)
+	}
+	if it.Label != config.AppName {
+		t.Fatalf("expected migrated label %q, got %q", config.AppName, it.Label)
 	}
 }
